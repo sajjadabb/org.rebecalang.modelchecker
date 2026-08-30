@@ -4,8 +4,9 @@ Working document for the unit-test work on the Transparent Actor Model Checker.
 It records what is covered, what the suite currently reports, which defects the
 tests exposed, and what is planned next. Kept up to date as the work proceeds.
 
-**Status:** tests landed; the three defects in section 6 are fixed. `ticketService`
-still fails and its cause is still unknown.
+**Status:** tests landed; four defects fixed. The whole suite passes its assertions;
+what remains are four errors, all of them stack overflows or a null hash on models
+large enough to reach code that was previously never executed.
 **Last updated:** 2026-08-30 · branch `tests/transparent-actor-coverage`
 
 ---
@@ -16,7 +17,8 @@ Work is confined to `org.rebecalang.transparentactormodelchecker`, the newer of 
 two engines in this repository. The older `modelchecker` engine is untouched, and so
 is `CoreRebecaModelsTest`, which is byte-identical to `master`.
 
-Three lines of `src/main` have been changed, all in section 7. Everything else is a test.
+Four small changes have been made to `src/main`, all listed in section 7. Everything
+else is a test.
 
 ## 2. Building and running
 
@@ -148,149 +150,200 @@ and networks with different bucket counts are not.
 ## 5. Current results
 
 ```
-Tests run: 97, Failures: 3, Errors: 3, Skipped: 5
+Tests run: 97, Failures: 0, Errors: 4, Skipped: 5
 ```
 
-All 53 added tests pass. The remaining failures and errors are the pre-existing ones
-from section 3, minus nothing: the three `ticketService` failures and the three
-`CoreRebecaModelsTest` errors are exactly as they were on `master`.
+Every assertion in the suite passes. The four errors are all crashes on the larger
+models, described in sections 6 and 7.
 
-For reference, the suite went 44 tests / 3 failures / 3 errors on `master`, to
-97 / 6 / 3 once the tests were added (the three extra failures being the defect
-reproductions), to 97 / 3 / 3 once those defects were fixed.
+How the suite moved:
+
+| Stage | Tests | Failures | Errors |
+|---|---:|---:|---:|
+| `master`, before any work | 44 | 3 | 3 |
+| after the tests were added | 97 | 6 | 3 |
+| after the first three fixes | 97 | 3 | 3 |
+| after the `delay` fix | 97 | **0** | 4 |
 
 Every added assertion was checked by inverting it and confirming that the test then
-fails. A test that stays green when its assertion is reversed is not testing anything,
-and two rounds were needed in places: when two mutations land in the same test method
-only the first is exercised, because the first failing assertion aborts the rest.
+fails. A test that stays green when its assertion is reversed is not testing anything.
+Two rounds were needed in places: when two mutations land in the same test method only
+the first is exercised, because the first failing assertion aborts the rest.
 
-## 6. Defects the tests exposed
+## 6. Defects found
 
-All three were found by reading the code and then confirmed with a minimal failing
-test. All three are now fixed; see section 7. The reproductions are kept as regression
-tests.
+Each was confirmed with a minimal failing test or a direct measurement before being
+recorded here. The reproductions are kept as regression tests.
 
-### 6.1 `TimeBucket.clone()` discards every message
+### 6.1 `TimeBucket.clone()` discarded every message
 
 ```java
 TimeBucket timeBucket = new TimeBucket(time);
 for (Entry<Integer, ActorReceivingBucket> arBucket : timeBucket.messages.entrySet()) {
 ```
 
-The loop iterates `timeBucket.messages` — the newly created, empty map — instead of
-`this.messages`, so its body never runs. The clone keeps the right `time` and no
-messages. `TimedRebecaNetworkState.clone()` calls this for every bucket, so cloning a
-timed network state silently empties it.
+The loop iterated `timeBucket.messages` — the newly created, empty map — instead of
+`this.messages`, so its body never ran. The clone kept the right `time` and no messages.
+`TimedRebecaNetworkState.clone()` calls this for every bucket, so cloning a timed network
+state silently emptied it.
 
 Reproduced by `GIVEN_ANetworkHoldingAMessage_WHEN_ItIsCloned_THEN_TheCloneStillHoldsThatMessage`
 — `expected: <1> but was: <0>`.
 
-### 6.2 `ActorReceivingBucket.shiftEquals()` compares only the first message
+### 6.2 `ActorReceivingBucket.shiftEquals()` compared only the first message
 
 ```java
 for (int cnt = 0; cnt < this.sentMessages.size(); cnt++)
     thisMessages.get(cnt).shiftEquals(otherMessages.get(cnt));
 ```
 
-The loop is bounded by `sentMessages.size()`, the number of receiver keys, but the
-index is applied to `thisMessages`, the message list for one key. Every
+The loop was bounded by `sentMessages.size()`, the number of receiver keys, while the
+index was applied to `thisMessages`, the message list for one key. Every
 `ActorReceivingBucket` is reached through `TimeBucket.getReceiverMessages(receiverId)`
-and therefore holds messages for exactly one receiver, so the bound is always 1 and
-every message after the first is never compared.
-
-Two states that differ only in a later message at the same instant are reported as
-equivalent, and the search treats one as already visited.
+and therefore holds messages for exactly one receiver, so the bound was always 1 and
+every message after the first was never compared.
 
 Reproduced by `GIVEN_AnActorReceivesTwoMessagesAtOneInstant_WHEN_OnlyTheSecondDiffers_THEN_TheNetworksAreNotEquivalent`
 — `expected: <false> but was: <true>`.
 
-### 6.3 `TimedRebecaNetworkState.addMessage()` does not keep buckets in time order
+### 6.3 `TimedRebecaNetworkState.addMessage()` did not keep buckets in time order
 
-```java
-for (; cnt < receivedMessages.size(); cnt++) {
-    int time = receivedMessages.get(cnt).getTime();
-    if (time < arrivalTime) continue;
-    if (time == arrivalTime) break;
-}
-```
-
-The `time > arrivalTime` case falls through both conditions and the loop continues, so
-it behaves exactly like `time < arrivalTime`. The scan never stops at the insertion
-point, `cnt` always ends at `size()`, and `add(cnt, timeBucket)` degenerates into an
-append — the `add(index, …)` call shows sorted insertion was intended. Bucket order
-then follows insertion order, while `equals` and `shiftEquals` compare the two lists
-index by index.
+The `time > arrivalTime` case fell through both conditions and the loop continued, so it
+behaved exactly like `time < arrivalTime`. The scan never stopped at the insertion point,
+`cnt` always ended at `size()`, and `add(cnt, timeBucket)` degenerated into an append —
+the `add(index, …)` call shows sorted insertion was intended. Bucket order then followed
+insertion order, while `equals` and `shiftEquals` compare the two lists index by index.
 
 Reproduced by `GIVEN_AMessageArrivesEarlierThanAnExistingOne_WHEN_ItIsAdded_THEN_BucketsStayOrderedByTime`
 — `expected: <10> but was: <30>`.
 
-## 7. Changes applied to `src/main`
+### 6.4 The built-in `delay` method was registered under an unreachable name
 
-Three lines, one per defect in section 6. Nothing else in `src/main` was touched.
+This is the one that made `ticketService` report a collapsed state space.
 
-| # | Change | Reproduction, now green |
-|---|---|---|
-| 1 | `TimeBucket.clone()` — iterate `this.messages` instead of the freshly created empty map | `…_TheCloneStillHoldsThatMessage` |
-| 2 | `ActorReceivingBucket.shiftEquals()` — bound the loop by `thisMessages.size()` instead of the key count | `…_TheNetworksAreNotEquivalent` |
-| 3 | `TimedRebecaNetworkState.addMessage()` — stop the scan at the insertion point and keep buckets in time order | `…_BucketsStayOrderedByTime` |
+`TransparentActorTimedRebecaFTTSModelChecker.initializeMethodBindingTable()` registers the
+built-in `delay` through `RILUtilities.computeMethodName(null, "delay", …)`, and that
+method builds its result as `className + "." + methodName`. With a `null` class name Java
+renders the literal string `"null"`, so the entry went in as `null.delay$int`. The RIL
+emits a base-less call as plain `delay$int`. Measured directly:
 
-Fix 3 needed slightly more than an added `break`. The check after the loop,
-`if (cnt != receivedMessages.size())`, could not tell "found a bucket at the same
-time" from "found the position to insert before". Breaking on `time > arrivalTime`
-alone would have made it reuse a bucket belonging to a *later* time — worse than the
-original bug. A flag now separates the two cases:
+```
+REGISTERED = [null.delay$int]
+CALLED     = [delay$int]
+```
+
+`MethodLookup.resolveName` therefore returned `null`, `MethodCallRule` stored a program
+counter of `(null, 0)`, and the next `getEnabledInstruction()` called
+`RILModel.getInstructionList(null)`, which is a `Hashtable.get(null)` —
+`NullPointerException`.
+
+Every Timed Rebeca model that calls `delay` crashed the moment it reached that statement.
+In the ticket service the crash happens in the third state, which is why the reported
+state space was 3 instead of 5.
+
+### 6.5 A crash inside model checking is reported as a result
 
 ```java
-boolean sameTimeBucketExists = false;
-for (; cnt < receivedMessages.size(); cnt++) {
-    int time = receivedMessages.get(cnt).getTime();
-    if (time < arrivalTime)
-        continue;
-    sameTimeBucketExists = (time == arrivalTime);
-    break;
-}
-if (sameTimeBucketExists)
-    timeBucket = receivedMessages.get(cnt);
-else {
-    timeBucket = new TimeBucket(arrivalTime);
-    receivedMessages.add(cnt, timeBucket);
+try {
+    dfs(initialState);
+} catch (Exception e) {
+    e.printStackTrace();
+    result = new TransparentActorModelCheckingResult(INTERNAL_ERROR);
+    result.setTransitionSystem(transitionSystem);   // the partial one
+    return result;
 }
 ```
 
-### `ticketService` was not affected
+`modelcheck` catches everything, prints a stack trace, and returns the partially built
+transition system. Callers that only read `getTransitionSystem().size()` — including
+`TimedRebecaModelsTest` — get a plausible-looking number that is simply the point where
+the search died.
 
-Section 6.2 was put forward as a *plausible* cause of the collapsing state space, on
-the grounds that over-aggressive state merging produces exactly that shape. **It is
-not the cause.** After the fix the numbers are byte-for-byte what they were before:
+This is worth separating from 6.4. The name-resolution bug was a crash; this is what
+turned the crash into a wrong answer. Because of it, the symptom read as "the state
+space collapses" and pointed the investigation at state merging, which cost a full round
+of work before the real cause was measured. It is not fixed here, since deciding what a
+model checker should return when it fails is the supervisor's call, but a caller cannot
+currently distinguish a completed search from an aborted one without checking the result
+status.
 
-| case | expected | before fixes | after fixes |
+## 7. Changes applied to `src/main`
+
+Four changes, each tied to a defect above.
+
+| # | Change | Effect |
+|---|---|---|
+| 1 | `TimeBucket.clone()` — iterate `this.messages` | 6.1 reproduction green |
+| 2 | `ActorReceivingBucket.shiftEquals()` — bound the loop by `thisMessages.size()` | 6.2 reproduction green |
+| 3 | `TimedRebecaNetworkState.addMessage()` — stop at the insertion point, keep buckets in time order | 6.3 reproduction green |
+| 4 | `TransparentActorTimedRebecaFTTSModelChecker` — register `delay` under the name the RIL actually calls | `ticketService` reaches its expected state counts |
+
+Fix 3 needed more than an added `break`. The check after the loop,
+`if (cnt != receivedMessages.size())`, could not tell "found a bucket at the same time"
+from "found the position to insert before". Breaking on `time > arrivalTime` alone would
+have made it reuse a bucket belonging to a *later* time — worse than the original bug. A
+flag now separates the two cases.
+
+### What the first three fixes did to `ticketService`: nothing
+
+6.2 was put forward as a plausible cause of the collapsing state space, on the grounds
+that over-aggressive state merging produces exactly that shape. It was wrong. After
+fixes 1–3 the numbers were byte-for-byte what they had been:
+
+| case | expected | before | after fixes 1–3 |
 |---|---:|---:|---:|
 | [1] | 5 | 3 | 3 |
 | [2] | 345 | 5 | 5 |
 | [3] | 13723 | 7 | 7 |
 
-Not a single state moved, so the merge in 6.2 never fired on this model. The three
-defects were real and are fixed, but the collapse has a different cause, still unknown.
+Not a single state moved. That ruled the hypothesis out and sent the investigation back
+to measurement rather than reading: dumping the three-state transition system showed the
+search stopping precisely before `TicketService.requestTicket`, whose body is the only
+place the model calls `delay`. Printing the registered name against the called name gave
+6.4 directly.
 
-Places not yet examined, in the order worth trying:
+### What fix 4 did
 
-- `TimedRebecaActorState.shiftEquals` — it compares bags element by element and reads
-  the local time out of scope; a wrong shift here would merge whole actor states.
-- `TimedRebecaSystemState` — merging at the system level would hide everything below it.
-- The FTTS transition-system construction, where the shift is actually applied.
+| case | expected | before | after |
+|---|---:|---:|---:|
+| [1] | 5 | 3 | **5** |
+| [2] | 345 | 5 | **345** |
+| [3] | 13723 | 7 | `StackOverflowError` |
 
-The three `CoreRebecaModelsTest` errors are separate again: the `NullPointerException`
-in `ActivationRecord.hashCode` and the `StackOverflowError` in the depth-first search
-are untouched by any of the above.
+The first two now reach their expected counts exactly. The third explores far enough to
+exhaust the JVM stack in the recursive `dfs` / `deliverAllMessagesAndExpand` pair.
+
+That third result is progress, not a regression. Before the fix the model was never
+explored at all: the search died after three states and returned 7 as though it were an
+answer. It now runs until it genuinely runs out of stack — a visible failure instead of a
+quiet wrong number.
+
+The remaining four errors are all of that kind:
+
+| Error | Note |
+|---|---|
+| `CoreRebecaModelsTest.GIVEN_RebecaModel_WHEN_No_Error` | `NullPointerException` in `ActivationRecord.hashCode`, which dereferences entry values unguarded while its own `equals` handles `null` |
+| `CoreRebecaModelsTest.GIVEN_DiningPhilosopherModel…[3]`, `[4]` | `StackOverflowError` in the recursive depth-first search |
+| `TimedRebecaModelsTest.ticketService[3]` | same recursion, now reachable |
+
+Three of the four were already failing on `master`. All four are untouched by the changes
+above and would need either an iterative search or a larger stack.
 
 ## 8. Open questions
 
+- Should the recursive `dfs` be rewritten with an explicit work list? Three of the four
+  remaining errors are stack overflows, and the fourth model is only moderately large.
+- Should `modelcheck` still return a transition system when it aborts (6.5), or should
+  the failure reach the caller?
+- Would `RILUtilities.computeMethodName` be better off treating a `null` class name as
+  "no class" rather than rendering the string `"null"`? That is the upstream form of 6.4
+  and would close the trap for every future caller, but it lives in
+  `org.rebecalang.modeltransformer` and affects everything that calls it.
 - In `TimedRebecaActorState.receiveMessage`, messages arriving at the same instant are
   ordered by *descending* name. Any deterministic order is sound, so this may well be
-  intentional, but it reads like a comparison that could have been meant the other way.
-- `SendMessageRule` lacking `@Component` while the other ten statement-level rules
-  have it: deliberate because `TimedRebecaSendMessageSOSRule` extends it, or an
-  oversight?
+  intentional.
+- `SendMessageRule` lacks `@Component` while the other ten statement-level rules have it:
+  deliberate because `TimedRebecaSendMessageSOSRule` extends it, or an oversight?
 - Should `ActorScope` name lookup tolerate a missing environment instead of raising
   `NullPointerException`?
 
@@ -301,12 +354,13 @@ Known gaps, in rough order of value:
 - `TimedRebecaActorState`: `memoizedClone`, `isEnable`, `createNewActorState`.
 - `TimedRebecaSystemState` and `TimedActorScope` have no direct tests.
 - `ActorReceivingBucket` is exercised only through the classes above it.
-- The timed variants of the network delivery rules (`TimedRebecaNetworkLevelDeliverMessage`,
-  `TimedRebecaFTTSNetworkLevelDeliverMessage`).
+- The timed variants of the network delivery rules
+  (`TimedRebecaNetworkLevelDeliverMessage`, `TimedRebecaFTTSNetworkLevelDeliverMessage`).
 
 ## 10. Log
 
 | Date | Change |
 |---|---|
 | 2026-08-30 | Baseline recorded (44 tests, 3 failures, 3 errors). 53 tests added across five classes; suite at 97. Three defects found and reproduced. `src/main` unchanged. |
-| 2026-08-30 | The three defects fixed in `src/main`; their reproductions now pass and the suite is at 97 / 3 / 3. `ticketService` unchanged, so 6.2 is ruled out as its cause. |
+| 2026-08-30 | The three defects fixed; their reproductions pass and the suite is at 97 / 3 / 3. `ticketService` unchanged, ruling 6.2 out as its cause. |
+| 2026-08-30 | `ticketService` root-caused to 6.4 by measurement and fixed. Suite at 97 / 0 / 4: all assertions pass, and the remaining errors are crashes on large models, three of which predate this work. |
