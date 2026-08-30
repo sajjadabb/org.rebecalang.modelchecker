@@ -4,9 +4,11 @@ Working document for the unit-test work on the Transparent Actor Model Checker.
 It records what is covered, what the suite currently reports, which defects the
 tests exposed, and what is planned next. Kept up to date as the work proceeds.
 
-**Status:** tests landed; six defects fixed. No test fails. One error remains, and it
-is a memory limit of the machine rather than a defect: the four-philosopher model needs
-more heap than is available here.
+**Status:** 91 tests added over three rounds, taking the suite from 44 to 135; six
+defects found and fixed. No test fails. One error remains, and it is a memory limit of
+the machine rather than a defect: the four-philosopher model needs more heap than is
+available here. 65 of the 79 classes in the package are now named by at least one test,
+up from 55.
 **Last updated:** 2026-08-30 · branch `tests/transparent-actor-coverage`
 
 ---
@@ -54,6 +56,11 @@ The 5 skipped tests are the `@Disabled` legacy-engine tests.
 ## 4. What the tests cover
 
 91 tests were added across eight classes; the last three are new files.
+
+Coverage below is reported as *classes named by at least one test file*, counted by
+searching every class name under `transparentactormodelchecker` in the text of the test
+sources. It is a coarse measure — naming a class is not exercising it — but it is
+reproducible and it is what turned up the gap the second and third rounds closed.
 
 | Test class | Before | After |
 |---|---:|---:|
@@ -457,10 +464,17 @@ machine has in total. It needs either more memory or a smaller per-state footpri
   deliberate because `TimedRebecaSendMessageSOSRule` extends it, or an oversight?
 - Should `ActorScope` name lookup tolerate a missing environment instead of raising
   `NullPointerException`?
+- `TimedRebecaNetworkLevelDeliverMessage.applyRule` has its whole body commented out, so
+  it can only ever throw `RuleIsDisabledException`. Is the class still wanted, or was the
+  FTTS variant meant to replace it? Six other classes in the package have no caller at
+  all. None of this produces wrong answers, so it is not counted among the six defects,
+  but it is the kind of thing that makes the engine look larger than it is.
+- The `actorsContainer` branch of `AbstractSystemState.equals` and `hashCode` is commented
+  out. It looks alarming and is not: the actors reach the comparison through
+  `environment`, which `setEnvironment` puts the container into. Worth a comment in the
+  code so the next reader does not spend the time this cost.
 
 ## 9. Still uncovered
-
-Known gaps, in rough order of value:
 
 14 of the 79 classes under `transparentactormodelchecker` are still not named by any
 test. They fall into three groups, and only the last is worth work:
