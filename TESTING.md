@@ -53,7 +53,7 @@ The 5 skipped tests are the `@Disabled` legacy-engine tests.
 
 ## 4. What the tests cover
 
-53 tests were added across five classes.
+66 tests were added across six classes, `TimeBucketTest` being new.
 
 | Test class | Before | After |
 |---|---:|---:|
@@ -62,7 +62,8 @@ The 5 skipped tests are the `@Disabled` legacy-engine tests.
 | `corerebeca/NetworkAndActorSOSRulesTest` | 2 | 10 |
 | `timedrebeca/TimedNetworkTest` | 5 | 13 |
 | `timedrebeca/TimedRebecaMessageTest` | 4 | 14 |
-| **suite total** | **44** | **97** |
+| `timedrebeca/TimeBucketTest` | 0 | 13 |
+| **suite total** | **44** | **110** |
 
 ### 4.1 `ActorScopeTest` — variable scoping
 
@@ -147,6 +148,27 @@ members at all), so the tests target the concrete Core Rebeca subclasses.
 distinct arrivals create separate buckets, two empty networks are shift-equivalent,
 and networks with different bucket counts are not.
 
+### 4.5 `TimeBucketTest` — the two bucket classes, driven directly
+
+`TimeBucket` and `ActorReceivingBucket` are only ever reached through
+`TimedRebecaNetworkState`, so 6.1 and 6.2 could sit in them for years without any test
+failing. This class drives both directly:
+
+- `TimeBucket.clone()` keeps the messages, produces copies rather than the same
+  `ActorReceivingBucket`, and the clone can be extended without touching the original;
+- messages for two receivers land in two separate receiving buckets;
+- `shiftEquals` on two buckets holding the same message matches, and buckets with
+  different receiver counts do not;
+- `ActorReceivingBucket.shiftEquals` on two empty buckets matches; **two messages for
+  one receiver that differ only in the second are not equivalent**, which is 6.2 as a
+  direct assertion rather than an indirect one;
+- a constant move of arrival and deadline is reported as that shift, and moving them by
+  different amounts is not equivalent;
+- cloning is independent, and `getAllSentMessages` keeps insertion order.
+
+Every assertion in the class was checked by inversion, in three rounds because some
+methods hold more than one.
+
 ## 5. Current results
 
 ```
@@ -168,6 +190,7 @@ How the suite moved:
 | after the first three fixes | 97 | 3 | 3 |
 | after the `delay` fix | 97 | 0 | 4 |
 | after the null-hash fix and a larger test stack | 97 | 0 | **1** |
+| after the bucket tests were added | **110** | 0 | **1** |
 
 **A measurement limitation worth knowing.** When the four-philosopher model exhausts the
 heap it kills the forked JVM, and surefire then reports nothing at all — not even for the
@@ -401,7 +424,6 @@ Known gaps, in rough order of value:
 
 - `TimedRebecaActorState`: `memoizedClone`, `isEnable`, `createNewActorState`.
 - `TimedRebecaSystemState` and `TimedActorScope` have no direct tests.
-- `ActorReceivingBucket` is exercised only through the classes above it.
 - The timed variants of the network delivery rules
   (`TimedRebecaNetworkLevelDeliverMessage`, `TimedRebecaFTTSNetworkLevelDeliverMessage`).
 
@@ -418,3 +440,4 @@ codebase nobody asked to touch.
 | 2026-08-30 | The three defects fixed; their reproductions pass and the suite is at 97 / 3 / 3. `ticketService` unchanged, ruling 6.2 out as its cause. |
 | 2026-08-30 | `ticketService` root-caused to 6.4 by measurement and fixed. Suite at 97 / 0 / 4: all assertions pass, and the remaining errors are crashes on large models, three of which predate this work. |
 | 2026-08-30 | Null-value hashing fixed (6.6), the catch in both model checkers narrowed (6.5), and the tests given a larger stack. Nothing fails now; the only error left is the four-philosopher model running out of heap on this machine. |
+| 2026-08-30 | `TimeBucketTest` added: 13 tests driving `TimeBucket` and `ActorReceivingBucket` directly, the two classes 6.1 and 6.2 lived in and which until now had no test of their own. Suite at 110 / 0 / 1. |
