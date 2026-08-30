@@ -9,7 +9,22 @@ defects found and fixed. No test fails. One error remains, and it is a memory li
 the machine rather than a defect: the four-philosopher model needs more heap than is
 available here. 65 of the 79 classes in the package are now named by at least one test,
 up from 55.
-**Last updated:** 2026-08-30 · branch `tests/transparent-actor-coverage`
+**Last updated:** 2026-08-31 · branch `tests/transparent-actor-coverage`
+
+---
+
+| | | |
+|---|---|---|
+| [1. Scope](#1-scope) | what is and is not touched | |
+| [2. Building and running](#2-building-and-running) | the commands, in order | |
+| [3. Baseline](#3-baseline-before-any-test-was-added) | 44 tests, 3 failures, 3 errors | |
+| [4. What the tests cover](#4-what-the-tests-cover) | class by class | 8 classes |
+| [5. Current results](#5-current-results) | how the suite moved | 135 / 0 / 1 |
+| [6. Defects found](#6-defects-found) | symptom, cause, reproduction | 6 defects |
+| [7. Changes to `src/main`](#7-changes-applied-to-srcmain) | what was edited and why | 6 + 1 |
+| [8. Open questions](#8-open-questions) | for the advisor | 7 questions |
+| [9. Still uncovered](#9-still-uncovered) | the honest gaps | 14 classes |
+| [10. Log](#10-log) | dated record of each round | |
 
 ---
 
@@ -34,8 +49,9 @@ mvn -f org.rebecalang.modeltransformer/pom.xml install -DskipTests   # 1.13
 mvn -f org.rebecalang.modelchecker/pom.xml     test                  # 4.0
 ```
 
-Requires JDK 17. Verified against `compiler` `dc663e0`, `modeltransformer` `2a1d0bd`
-and `modelchecker` `fb4197f4`.
+Requires JDK 17. The two siblings are used unmodified at `compiler` `dc663e0` and
+`modeltransformer` `2a1d0bd`. `fb4197f4` is the `master` commit this work branched from;
+the work itself is on `tests/transparent-actor-coverage`, head `8afc8e6`.
 
 ## 3. Baseline, before any test was added
 
@@ -59,8 +75,17 @@ The 5 skipped tests are the `@Disabled` legacy-engine tests.
 
 Coverage below is reported as *classes named by at least one test file*, counted by
 searching every class name under `transparentactormodelchecker` in the text of the test
-sources. It is a coarse measure — naming a class is not exercising it — but it is
-reproducible and it is what turned up the gap the second and third rounds closed.
+sources. It is a coarse measure — naming a class is not exercising it, so the number it
+gives is an optimistic ceiling — but it is reproducible and it is what turned up the gap
+the second and third rounds closed:
+
+```
+cd src
+for f in $(find main -path '*transparentactormodelchecker*' -name '*.java'); do
+  n=$(basename "$f" .java)
+  grep -rq "$n" test || echo "no test names: $n"
+done | wc -l          # 24 after round one, 14 now
+```
 
 | Test class | Before | After |
 |---|---:|---:|
@@ -138,7 +163,7 @@ down, to the individual rules.
 `TakeMessageRule` and `NetworkLevelDeliverMessageRule` are abstract (the latter has no
 members at all), so the tests target the concrete Core Rebeca subclasses.
 
-### 4.4 Timed extension
+### 4.4 `TimedRebecaMessageTest` and `TimedNetworkTest` — the timed extension
 
 `TimedRebecaMessageState` and the actor's message bag:
 
@@ -249,16 +274,27 @@ mvn test -Dtest='!CoreRebecaModelsTest'
 mvn test -Dtest='CoreRebecaModelsTest#GIVEN_RebecaModel_WHEN_No_Error+GIVEN_SELF_LOOP_RebecaModel_WHEN_No_Error'
 ```
 
-The three smaller Dining Philosophers cases were verified passing before the change in
-7.6; they cannot be re-measured after it, because the fourth case destroys the run before
+The three smaller Dining Philosophers cases were verified passing before change 6
+in section 7; they cannot be re-measured after it, because the fourth case destroys the run before
 any result is written. The print of each state-space size sits *after* its assertion, so
 seeing `size: 105`, `size: 1471` and `size: 18053` in the log is itself proof that those
 three assertions held.
 
-Every added assertion was checked by inverting it and confirming that the test then
-fails. A test that stays green when its assertion is reversed is not testing anything.
-Two rounds were needed in places: when two mutations land in the same test method only
-the first is exercised, because the first failing assertion aborts the rest.
+Every one of the 91 added assertions was checked by inverting it and confirming that the
+test then fails. A test that stays green when its assertion is reversed is not testing
+anything. None survived.
+
+The check runs in rounds, one assertion per test method per round, because when two
+inversions land in the same method only the first is exercised — the first failing
+assertion aborts the rest. The number of rounds is therefore the largest number of
+assertions in any one method: three for `TimeBucketTest` and
+`TransitionSystemStructureTest`, two for `TimedRuleTest`.
+
+Two mechanical traps are worth knowing if you repeat this. The inverse of
+`assertNotSame` is `assertSame`, which the file does not import, and the inverse of
+`assertThrows(E.class, …)` is a different exception type. Get either wrong and the round
+fails to *compile*, surefire reports nothing, and every assertion looks like a survivor.
+That happened once here.
 
 ## 6. Defects found
 
@@ -352,7 +388,7 @@ the search died.
 This is worth separating from 6.4. The name-resolution bug was a crash; this is what
 turned the crash into a wrong answer. Because of it, the symptom read as "the state
 space collapses" and pointed the investigation at state merging, which cost a full round
-of work before the real cause was measured. Fixed in 7.6 by narrowing the catch rather than removing it.
+of work before the real cause was measured. Fixed by change 6 in section 7, which narrows the catch rather than removing it.
 
 ### 6.6 `ActivationRecord.hashCode` dereferenced null values
 
@@ -507,4 +543,5 @@ codebase nobody asked to touch.
 | 2026-08-30 | `ticketService` root-caused to 6.4 by measurement and fixed. Suite at 97 / 0 / 4: all assertions pass, and the remaining errors are crashes on large models, three of which predate this work. |
 | 2026-08-30 | Null-value hashing fixed (6.6), the catch in both model checkers narrowed (6.5), and the tests given a larger stack. Nothing fails now; the only error left is the four-philosopher model running out of heap on this machine. |
 | 2026-08-30 | `TimeBucketTest` added: 13 tests driving `TimeBucket` and `ActorReceivingBucket` directly, the two classes 6.1 and 6.2 lived in and which until now had no test of their own. Suite at 110 / 0 / 1. |
+| 2026-08-31 | Document revised: contents table, the coverage command made reproducible, the inversion procedure and its two compile traps written down, and an ambiguous cross-reference to section 7 fixed. No code change. |
 | 2026-08-30 | `TimedRuleTest` (13) and `TransitionSystemStructureTest` (12) added, covering the timed SOS rules and the state space container. Suite at 135 / 0 / 1; 65 of the 79 engine classes are now named by a test, up from 55 at the baseline. |
