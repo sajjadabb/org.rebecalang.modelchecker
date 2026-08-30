@@ -53,7 +53,7 @@ The 5 skipped tests are the `@Disabled` legacy-engine tests.
 
 ## 4. What the tests cover
 
-66 tests were added across six classes, `TimeBucketTest` being new.
+91 tests were added across eight classes; the last three are new files.
 
 | Test class | Before | After |
 |---|---:|---:|
@@ -63,7 +63,9 @@ The 5 skipped tests are the `@Disabled` legacy-engine tests.
 | `timedrebeca/TimedNetworkTest` | 5 | 13 |
 | `timedrebeca/TimedRebecaMessageTest` | 4 | 14 |
 | `timedrebeca/TimeBucketTest` | 0 | 13 |
-| **suite total** | **44** | **110** |
+| `timedrebeca/TimedRuleTest` | 0 | 13 |
+| `TransitionSystemStructureTest` | 0 | 12 |
+| **suite total** | **44** | **135** |
 
 ### 4.1 `ActorScopeTest` — variable scoping
 
@@ -169,11 +171,48 @@ failing. This class drives both directly:
 Every assertion in the class was checked by inversion, in three rounds because some
 methods hold more than one.
 
+### 4.6 `TimedRuleTest` — the timed SOS rules
+
+The core-Rebeca take-message and delivery rules have tests; their timed counterparts,
+which is what every Timed Rebeca model actually runs on, had none.
+
+- `TimedRebecaTakeMessageRule`: disabled on an empty bag and on a message that has not
+  arrived yet; an arrived message is taken, leaves the bag, and its parameters are bound
+  into the new frame;
+- `TimedRebecaFTTSNetworkLevelDeliverMessage`: disabled on an empty network; a held
+  message is delivered and leaves the network; with messages at two instants **the
+  earlier bucket goes first and the later one stays**;
+- `TimedRebecaCompositionLevelTakeMessageRule`: disabled when no actor has an arrived
+  message, and moves the one actor that does. Its `takeMessageRule` is injected, so the
+  test sets it with `ReflectionTestUtils`;
+- `TimedRebecaNetworkLevelDeliverMessage`: **its whole `applyRule` body is commented out
+  in `src/main`**, so it can never produce a transition. One test records that, rather
+  than leaving the class looking as though it works.
+
+### 4.7 `TransitionSystemStructureTest` — the state space container
+
+`CoreRebecaTransitionSystem.addIfNotExists` is what decides whether a newly reached state
+is one the search has seen before, so every state count the tool reports is the number
+this method arrives at. It had no test.
+
+- a fresh transition system holds only its initial state;
+- an unseen state is added and the size grows; the same state offered twice comes back as
+  the existing object and the size does not grow; two different states both get added;
+- an added state is linked to its predecessor in both directions.
+
+One thing worth writing down, because it cost time here: the actors are **not** compared
+by the commented-out `actorsContainer` branch of `AbstractSystemState.equals`. They are
+compared through `environment`, which `setEnvironment` puts the container into. A test
+that builds a system state without an environment finds every state equal to every other.
+
+The class also covers `MethodCallActivationRecord` (the scope index takes part in equality,
+and cloning is independent) and `ModelCheckingRuntimeException`.
+
 ## 5. Current results
 
 ```
-91 tests outside CoreRebecaModelsTest : 0 failures, 0 errors, 5 skipped
-CoreRebecaModelsTest                  : 5 of 6 pass, 1 out of memory
+129 tests outside CoreRebecaModelsTest : 0 failures, 0 errors, 5 skipped
+CoreRebecaModelsTest                   : 5 of 6 pass, 1 out of memory
 ```
 
 No test fails anywhere. The single remaining error is
@@ -191,6 +230,7 @@ How the suite moved:
 | after the `delay` fix | 97 | 0 | 4 |
 | after the null-hash fix and a larger test stack | 97 | 0 | **1** |
 | after the bucket tests were added | **110** | 0 | **1** |
+| after the timed rules and the transition system | **135** | 0 | **1** |
 
 **A measurement limitation worth knowing.** When the four-philosopher model exhausts the
 heap it kills the forked JVM, and surefire then reports nothing at all — not even for the
@@ -422,10 +462,22 @@ machine has in total. It needs either more memory or a smaller per-state footpri
 
 Known gaps, in rough order of value:
 
-- `TimedRebecaActorState`: `memoizedClone`, `isEnable`, `createNewActorState`.
-- `TimedRebecaSystemState` and `TimedActorScope` have no direct tests.
-- The timed variants of the network delivery rules
-  (`TimedRebecaNetworkLevelDeliverMessage`, `TimedRebecaFTTSNetworkLevelDeliverMessage`).
+14 of the 79 classes under `transparentactormodelchecker` are still not named by any
+test. They fall into three groups, and only the last is worth work:
+
+- **abstract, covered through their subclasses** — `Action`, `AbstractSOSRule`,
+  `TakeMessageRule`, `NetworkLevelDeliverMessageRule`, `TransparentActorTransitionSystem`,
+  `TransparentActorAbstractModelChecker`;
+- **dead code with no caller anywhere in `src/main`** — `AbstractTransition`,
+  `DeterministicTransition` and `NondeterministicTransition` (all three `@Deprecated` and
+  superseded by `Transition`), plus `NetworkDeliveryAction`, `ShiftTimeAction`,
+  `RebecaStateSerializationUtil` and `TransparentActorModelChecker`. A test here would
+  assert things about code nothing runs; deleting them would be the real fix;
+- **reachable but needing a compiled model** — `StateGenerationUtils.getEnvironment`
+  takes a `RebecaModel`, so testing it means compiling a model first.
+
+Still thin rather than absent: `TimedRebecaActorState.memoizedClone`, `isEnable` and
+`createNewActorState`, and `TimedActorScope`.
 
 The five `@Disabled` tests were left alone on purpose. All of them are under
 `org/rebecalang/modelchecker`, the older engine, which is outside the area this work was
@@ -441,3 +493,4 @@ codebase nobody asked to touch.
 | 2026-08-30 | `ticketService` root-caused to 6.4 by measurement and fixed. Suite at 97 / 0 / 4: all assertions pass, and the remaining errors are crashes on large models, three of which predate this work. |
 | 2026-08-30 | Null-value hashing fixed (6.6), the catch in both model checkers narrowed (6.5), and the tests given a larger stack. Nothing fails now; the only error left is the four-philosopher model running out of heap on this machine. |
 | 2026-08-30 | `TimeBucketTest` added: 13 tests driving `TimeBucket` and `ActorReceivingBucket` directly, the two classes 6.1 and 6.2 lived in and which until now had no test of their own. Suite at 110 / 0 / 1. |
+| 2026-08-30 | `TimedRuleTest` (13) and `TransitionSystemStructureTest` (12) added, covering the timed SOS rules and the state space container. Suite at 135 / 0 / 1; 65 of the 79 engine classes are now named by a test, up from 55 at the baseline. |
