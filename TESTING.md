@@ -4,7 +4,8 @@ Working document for the unit-test work on the Transparent Actor Model Checker.
 It records what is covered, what the suite currently reports, which defects the
 tests exposed, and what is planned next. Kept up to date as the work proceeds.
 
-**Status:** tests landed, production code not yet changed.
+**Status:** tests landed; the three defects in section 6 are fixed. `ticketService`
+still fails and its cause is still unknown.
 **Last updated:** 2026-08-30 · branch `tests/transparent-actor-coverage`
 
 ---
@@ -15,7 +16,7 @@ Work is confined to `org.rebecalang.transparentactormodelchecker`, the newer of 
 two engines in this repository. The older `modelchecker` engine is untouched, and so
 is `CoreRebecaModelsTest`, which is byte-identical to `master`.
 
-No file under `src/main` has been modified. Every change so far is a test.
+Three lines of `src/main` have been changed, all in section 7. Everything else is a test.
 
 ## 2. Building and running
 
@@ -147,11 +148,16 @@ and networks with different bucket counts are not.
 ## 5. Current results
 
 ```
-Tests run: 97, Failures: 6, Errors: 3, Skipped: 5
+Tests run: 97, Failures: 3, Errors: 3, Skipped: 5
 ```
 
-Three failures and three errors are the pre-existing ones from section 3. The other
-three failures are new and deliberate — see the next section.
+All 53 added tests pass. The remaining failures and errors are the pre-existing ones
+from section 3, minus nothing: the three `ticketService` failures and the three
+`CoreRebecaModelsTest` errors are exactly as they were on `master`.
+
+For reference, the suite went 44 tests / 3 failures / 3 errors on `master`, to
+97 / 6 / 3 once the tests were added (the three extra failures being the defect
+reproductions), to 97 / 3 / 3 once those defects were fixed.
 
 Every added assertion was checked by inverting it and confirming that the test then
 fails. A test that stays green when its assertion is reversed is not testing anything,
@@ -161,8 +167,8 @@ only the first is exercised, because the first failing assertion aborts the rest
 ## 6. Defects the tests exposed
 
 All three were found by reading the code and then confirmed with a minimal failing
-test. They are left failing on purpose, so they stay visible rather than being
-asserted away.
+test. All three are now fixed; see section 7. The reproductions are kept as regression
+tests.
 
 ### 6.1 `TimeBucket.clone()` discards every message
 
@@ -218,32 +224,64 @@ index by index.
 Reproduced by `GIVEN_AMessageArrivesEarlierThanAnExistingOne_WHEN_ItIsAdded_THEN_BucketsStayOrderedByTime`
 — `expected: <10> but was: <30>`.
 
-## 7. Planned changes to `src/main`
+## 7. Changes applied to `src/main`
 
-Not yet applied. To be agreed with the supervisor first, since this area is under
-active development.
+Three lines, one per defect in section 6. Nothing else in `src/main` was touched.
 
-| # | Change | Test that should turn green |
+| # | Change | Reproduction, now green |
 |---|---|---|
-| 1 | `TimeBucket.clone()` — iterate `this.messages` | `…_TheCloneStillHoldsThatMessage` |
-| 2 | `ActorReceivingBucket.shiftEquals()` — bound the loop by `thisMessages.size()` | `…_TheNetworksAreNotEquivalent` |
-| 3 | `TimedRebecaNetworkState.addMessage()` — stop the scan when `time > arrivalTime` so the bucket is inserted in order | `…_BucketsStayOrderedByTime` |
+| 1 | `TimeBucket.clone()` — iterate `this.messages` instead of the freshly created empty map | `…_TheCloneStillHoldsThatMessage` |
+| 2 | `ActorReceivingBucket.shiftEquals()` — bound the loop by `thisMessages.size()` instead of the key count | `…_TheNetworksAreNotEquivalent` |
+| 3 | `TimedRebecaNetworkState.addMessage()` — stop the scan at the insertion point and keep buckets in time order | `…_BucketsStayOrderedByTime` |
 
-Expected suite afterwards:
+Fix 3 needed slightly more than an added `break`. The check after the loop,
+`if (cnt != receivedMessages.size())`, could not tell "found a bucket at the same
+time" from "found the position to insert before". Breaking on `time > arrivalTime`
+alone would have made it reuse a bucket belonging to a *later* time — worse than the
+original bug. A flag now separates the two cases:
 
+```java
+boolean sameTimeBucketExists = false;
+for (; cnt < receivedMessages.size(); cnt++) {
+    int time = receivedMessages.get(cnt).getTime();
+    if (time < arrivalTime)
+        continue;
+    sameTimeBucketExists = (time == arrivalTime);
+    break;
+}
+if (sameTimeBucketExists)
+    timeBucket = receivedMessages.get(cnt);
+else {
+    timeBucket = new TimeBucket(arrivalTime);
+    receivedMessages.add(cnt, timeBucket);
+}
 ```
-Tests run: 97, Failures: 0-3, Errors: 3
-```
 
-The three deliberate failures should clear. Whether `TimedRebecaModelsTest.ticketService`
-also recovers is **an open question, not a prediction**. Its symptom — a state space
-that shrinks further the larger the model gets (13723 down to 7) — is what
-over-aggressive state merging looks like, and 6.2 is exactly such a merge. That makes
-it a plausible cause, but the only way to settle it is to apply the fix and re-measure.
+### `ticketService` was not affected
 
-The three `CoreRebecaModelsTest` errors are separate: the `NullPointerException` in
-`ActivationRecord.hashCode` and the `StackOverflowError` in the depth-first search are
-untouched by any of the above.
+Section 6.2 was put forward as a *plausible* cause of the collapsing state space, on
+the grounds that over-aggressive state merging produces exactly that shape. **It is
+not the cause.** After the fix the numbers are byte-for-byte what they were before:
+
+| case | expected | before fixes | after fixes |
+|---|---:|---:|---:|
+| [1] | 5 | 3 | 3 |
+| [2] | 345 | 5 | 5 |
+| [3] | 13723 | 7 | 7 |
+
+Not a single state moved, so the merge in 6.2 never fired on this model. The three
+defects were real and are fixed, but the collapse has a different cause, still unknown.
+
+Places not yet examined, in the order worth trying:
+
+- `TimedRebecaActorState.shiftEquals` — it compares bags element by element and reads
+  the local time out of scope; a wrong shift here would merge whole actor states.
+- `TimedRebecaSystemState` — merging at the system level would hide everything below it.
+- The FTTS transition-system construction, where the shift is actually applied.
+
+The three `CoreRebecaModelsTest` errors are separate again: the `NullPointerException`
+in `ActivationRecord.hashCode` and the `StackOverflowError` in the depth-first search
+are untouched by any of the above.
 
 ## 8. Open questions
 
@@ -271,3 +309,4 @@ Known gaps, in rough order of value:
 | Date | Change |
 |---|---|
 | 2026-08-30 | Baseline recorded (44 tests, 3 failures, 3 errors). 53 tests added across five classes; suite at 97. Three defects found and reproduced. `src/main` unchanged. |
+| 2026-08-30 | The three defects fixed in `src/main`; their reproductions now pass and the suite is at 97 / 3 / 3. `ticketService` unchanged, so 6.2 is ruled out as its cause. |
