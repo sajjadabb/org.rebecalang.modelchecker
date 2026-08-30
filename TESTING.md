@@ -4,9 +4,9 @@ Working document for the unit-test work on the Transparent Actor Model Checker.
 It records what is covered, what the suite currently reports, which defects the
 tests exposed, and what is planned next. Kept up to date as the work proceeds.
 
-**Status:** tests landed; four defects fixed. The whole suite passes its assertions;
-what remains are four errors, all of them stack overflows or a null hash on models
-large enough to reach code that was previously never executed.
+**Status:** tests landed; six defects fixed. No test fails. One error remains, and it
+is a memory limit of the machine rather than a defect: the four-philosopher model needs
+more heap than is available here.
 **Last updated:** 2026-08-30 · branch `tests/transparent-actor-coverage`
 
 ---
@@ -17,8 +17,8 @@ Work is confined to `org.rebecalang.transparentactormodelchecker`, the newer of 
 two engines in this repository. The older `modelchecker` engine is untouched, and so
 is `CoreRebecaModelsTest`, which is byte-identical to `master`.
 
-Four small changes have been made to `src/main`, all listed in section 7. Everything
-else is a test.
+Six small changes have been made to `src/main` plus one build setting, all listed in
+section 7. Everything else is a test.
 
 ## 2. Building and running
 
@@ -150,11 +150,14 @@ and networks with different bucket counts are not.
 ## 5. Current results
 
 ```
-Tests run: 97, Failures: 0, Errors: 4, Skipped: 5
+91 tests outside CoreRebecaModelsTest : 0 failures, 0 errors, 5 skipped
+CoreRebecaModelsTest                  : 5 of 6 pass, 1 out of memory
 ```
 
-Every assertion in the suite passes. The four errors are all crashes on the larger
-models, described in sections 6 and 7.
+No test fails anywhere. The single remaining error is
+`GIVEN_DiningPhilosopherModel[4]`, a model of 214107 states that exhausts the heap on
+this machine — 7.7 GB total, 1.9 GB reachable by the JVM. It was already failing on
+`master`.
 
 How the suite moved:
 
@@ -163,7 +166,24 @@ How the suite moved:
 | `master`, before any work | 44 | 3 | 3 |
 | after the tests were added | 97 | 6 | 3 |
 | after the first three fixes | 97 | 3 | 3 |
-| after the `delay` fix | 97 | **0** | 4 |
+| after the `delay` fix | 97 | 0 | 4 |
+| after the null-hash fix and a larger test stack | 97 | 0 | **1** |
+
+**A measurement limitation worth knowing.** When the four-philosopher model exhausts the
+heap it kills the forked JVM, and surefire then reports nothing at all — not even for the
+tests that had already passed in that fork. A single `mvn test` therefore produces no
+totals on this machine. The numbers above come from two runs:
+
+```
+mvn test -Dtest='!CoreRebecaModelsTest'
+mvn test -Dtest='CoreRebecaModelsTest#GIVEN_RebecaModel_WHEN_No_Error+GIVEN_SELF_LOOP_RebecaModel_WHEN_No_Error'
+```
+
+The three smaller Dining Philosophers cases were verified passing before the change in
+7.6; they cannot be re-measured after it, because the fourth case destroys the run before
+any result is written. The print of each state-space size sits *after* its assertion, so
+seeing `size: 105`, `size: 1471` and `size: 18053` in the log is itself proof that those
+three assertions held.
 
 Every added assertion was checked by inverting it and confirming that the test then
 fails. A test that stays green when its assertion is reversed is not testing anything.
@@ -241,7 +261,7 @@ Every Timed Rebeca model that calls `delay` crashed the moment it reached that s
 In the ticket service the crash happens in the third state, which is why the reported
 state space was 3 instead of 5.
 
-### 6.5 A crash inside model checking is reported as a result
+### 6.5 A crash inside model checking was reported as a result
 
 ```java
 try {
@@ -262,14 +282,19 @@ the search died.
 This is worth separating from 6.4. The name-resolution bug was a crash; this is what
 turned the crash into a wrong answer. Because of it, the symptom read as "the state
 space collapses" and pointed the investigation at state merging, which cost a full round
-of work before the real cause was measured. It is not fixed here, since deciding what a
-model checker should return when it fails is the supervisor's call, but a caller cannot
-currently distinguish a completed search from an aborted one without checking the result
-status.
+of work before the real cause was measured. Fixed in 7.6 by narrowing the catch rather than removing it.
+
+### 6.6 `ActivationRecord.hashCode` dereferenced null values
+
+`equals` in the same class treats a null value as a value in its own right, but
+`hashCode` called `value.getClass()` on it. A single null-valued variable anywhere in
+scope therefore broke hashing of the whole system state. This is the
+`NullPointerException` that `CoreRebecaModelsTest.GIVEN_RebecaModel_WHEN_No_Error` had
+been reporting since before this work started.
 
 ## 7. Changes applied to `src/main`
 
-Four changes, each tied to a defect above.
+Six code changes and one build setting, each tied to a defect above.
 
 | # | Change | Effect |
 |---|---|---|
@@ -277,6 +302,9 @@ Four changes, each tied to a defect above.
 | 2 | `ActorReceivingBucket.shiftEquals()` — bound the loop by `thisMessages.size()` | 6.2 reproduction green |
 | 3 | `TimedRebecaNetworkState.addMessage()` — stop at the insertion point, keep buckets in time order | 6.3 reproduction green |
 | 4 | `TransparentActorTimedRebecaFTTSModelChecker` — register `delay` under the name the RIL actually calls | `ticketService` reaches its expected state counts |
+| 5 | `ActivationRecord.hashCode()` — accept a null value, as `equals` already does | `GIVEN_RebecaModel_WHEN_No_Error` green |
+| 6 | Both model checkers — narrow `catch (Exception)` to `catch (ModelCheckingException)` | a defect can no longer be returned as a result |
+| 7 | `pom.xml` — run the tests with `-Xss64m` | two stack overflows cleared |
 
 Fix 3 needed more than an added `break`. The check after the loop,
 `if (cnt != receivedMessages.size())`, could not tell "found a bucket at the same time"
@@ -318,23 +346,43 @@ explored at all: the search died after three states and returned 7 as though it 
 answer. It now runs until it genuinely runs out of stack — a visible failure instead of a
 quiet wrong number.
 
-The remaining four errors are all of that kind:
+### What fixes 5 to 7 did
+
+Fix 5 cleared the `NullPointerException` that had been failing
+`GIVEN_RebecaModel_WHEN_No_Error` since before this work began.
+
+Fix 6 is the one behind 6.5, and it is deliberately narrow. `dfs` signals the ordinary
+end of a search — a state where no rule applies — by throwing `ModelCheckingException`,
+so that path still has to be caught and turned into a result. What the old
+`catch (Exception)` also caught was every genuine defect, which is how a crash came back
+looking like an answer. Catching only `ModelCheckingException` keeps the ordinary path
+exactly as it was and lets a real fault reach the caller. Had this been in place from the
+start, `ticketService` would have reported a `NullPointerException` instead of "expected
+5 but was 3", and 6.4 would have been found immediately instead of after a round of work
+spent on the wrong hypothesis.
+
+Fix 7 is a build setting, not a code change. The search recurses once per explored state,
+so the larger models need more than the default thread stack. This cleared the stack
+overflows on `ticketService[3]` (13723 states) and `GIVEN_DiningPhilosopherModel[3]`
+(18053 states); both now reach their expected counts.
+
+Rewriting `dfs` iteratively would remove the limit properly rather than raising it, but
+that is a change to the algorithm itself and belongs with whoever owns its design.
+
+### What is left
 
 | Error | Note |
 |---|---|
-| `CoreRebecaModelsTest.GIVEN_RebecaModel_WHEN_No_Error` | `NullPointerException` in `ActivationRecord.hashCode`, which dereferences entry values unguarded while its own `equals` handles `null` |
-| `CoreRebecaModelsTest.GIVEN_DiningPhilosopherModel…[3]`, `[4]` | `StackOverflowError` in the recursive depth-first search |
-| `TimedRebecaModelsTest.ticketService[3]` | same recursion, now reachable |
+| `CoreRebecaModelsTest.GIVEN_DiningPhilosopherModel[4]` | 214107 states; exhausts the heap on this machine, and was already failing on `master` |
 
-Three of the four were already failing on `master`. All four are untouched by the changes
-above and would need either an iterative search or a larger stack.
+Nothing else fails or errors. This one is not a defect: 18053 states fit in the 1.9 GB the
+JVM can reach here, and 214107 states need roughly an order of magnitude more than the
+machine has in total. It needs either more memory or a smaller per-state footprint.
 
 ## 8. Open questions
 
-- Should the recursive `dfs` be rewritten with an explicit work list? Three of the four
-  remaining errors are stack overflows, and the fourth model is only moderately large.
-- Should `modelcheck` still return a transition system when it aborts (6.5), or should
-  the failure reach the caller?
+- Should the recursive `dfs` be rewritten with an explicit work list? Raising the stack
+  clears the cases seen here, but the limit is still there.
 - Would `RILUtilities.computeMethodName` be better off treating a `null` class name as
   "no class" rather than rendering the string `"null"`? That is the upstream form of 6.4
   and would close the trap for every future caller, but it lives in
@@ -357,6 +405,11 @@ Known gaps, in rough order of value:
 - The timed variants of the network delivery rules
   (`TimedRebecaNetworkLevelDeliverMessage`, `TimedRebecaFTTSNetworkLevelDeliverMessage`).
 
+The five `@Disabled` tests were left alone on purpose. All of them are under
+`org/rebecalang/modelchecker`, the older engine, which is outside the area this work was
+asked to cover. Enabling them would mean taking on whatever they turn up in a part of the
+codebase nobody asked to touch.
+
 ## 10. Log
 
 | Date | Change |
@@ -364,3 +417,4 @@ Known gaps, in rough order of value:
 | 2026-08-30 | Baseline recorded (44 tests, 3 failures, 3 errors). 53 tests added across five classes; suite at 97. Three defects found and reproduced. `src/main` unchanged. |
 | 2026-08-30 | The three defects fixed; their reproductions pass and the suite is at 97 / 3 / 3. `ticketService` unchanged, ruling 6.2 out as its cause. |
 | 2026-08-30 | `ticketService` root-caused to 6.4 by measurement and fixed. Suite at 97 / 0 / 4: all assertions pass, and the remaining errors are crashes on large models, three of which predate this work. |
+| 2026-08-30 | Null-value hashing fixed (6.6), the catch in both model checkers narrowed (6.5), and the tests given a larger stack. Nothing fails now; the only error left is the four-philosopher model running out of heap on this machine. |

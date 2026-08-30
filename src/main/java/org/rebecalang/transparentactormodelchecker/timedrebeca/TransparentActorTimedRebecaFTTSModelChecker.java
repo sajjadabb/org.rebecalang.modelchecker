@@ -104,9 +104,11 @@ public class TransparentActorTimedRebecaFTTSModelChecker extends TransparentActo
 		
 		try {
 			dfs(initialState);
-		} catch (Exception e) {
-			e.printStackTrace();;
-			TransparentActorModelCheckingResult result = 
+		} catch (ModelCheckingException e) {
+			// only the search reaching a state with no applicable rule is reported as a
+			// result; anything else is a defect in the checker and must not be returned
+			// as though it were an answer
+			TransparentActorModelCheckingResult result =
 					new TransparentActorModelCheckingResult(TransparentActorModelCheckingResult.INTERNAL_ERROR);
 			result.setTransitionSystem(transitionSystem);
 			return result;
