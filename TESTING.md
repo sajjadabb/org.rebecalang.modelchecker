@@ -37,6 +37,12 @@ is `CoreRebecaModelsTest`, which is byte-identical to `master`.
 Six small changes have been made to `src/main` plus one build setting, all listed in
 section 7. Everything else is a test.
 
+The work ran from Khordad to Shahrivar 1405 (June to September 2026), two stages per
+month, in the order section 10 records: environment and baseline, then the scope and
+rule tests, then the timed extension, then the six defects, then two further rounds of
+tests driven by a coverage audit, then the write-up. The dates in section 10 are the
+dates the commits landed, which is why they cluster at the end.
+
 ## 2. Building and running
 
 The `org.rebecalang` artifacts are not published to Maven Central, and the poms pin
